@@ -1,0 +1,398 @@
+<html>
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1.0" />
+  <!-- Import style -->
+  <link rel="stylesheet" href="./stylesheets/index.css" />
+  <link rel="stylesheet" href="./stylesheets/style.css" />
+  <!-- Import Vue 3 -->
+  <script src="./javascripts/vue.global.js"></script>
+  <!-- Import component library -->
+  <script src="./javascripts/elementPlsu.js"></script>
+  <title>局域网聊天室BearHero520</title>
+</head>
+
+<body>
+  <div id="app">
+    <div class="container" :class="theme" :style="{'backgroundSize':`${intervalBg}px`}">
+      <div class="userInfo">
+        <div class="port">
+          <p v-for="item of systemConfig" class="portItem" @click="copyToClipboard(item)">
+            {{item}}
+          </p>
+          <p class="wsItem" :class="{'portItem':wsStatus==1}">{{wsText[wsStatus]}}</p>
+        </div>
+        <div class="systemInfo">
+          <el-radio-group v-model="theme">
+            <el-radio-button label="黑夜" value="dark"></el-radio-button>
+            <el-radio-button label="夜晚" value="bule"></el-radio-button>
+            <el-radio-button label="白天" value="light"></el-radio-button>
+          </el-radio-group>
+          <el-slider v-model="intervalBg" :min="50" :max="200" :step="20"></el-slider>
+        </div>
+
+        <div class="user flip-card">
+          <div v-if="!userID && !userInfo.username" class="login">
+            <el-input v-model="user.username" placeholder="请输入用户名" maxlength="10"></el-input>
+            <el-input v-model="user.password" placeholder="请输入密码"></el-input>
+            <el-button type="primary" @click="login()">登录</el-button>
+          </div>
+          <div v-else class="logined">
+            <el-avatar :src="userInfo?.avatar_url" size="large">{{userInfo?.avatar_url ? '':userInfo?.username}}
+            </el-avatar>
+            <div class="info textHide">
+              <span class="textHide">{{userInfo?.username}}</span>
+              <el-button type="primary" @click="logOut()">退出</el-button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="chatArea">
+        <div class="chat" id="chat">
+          <div class="msgBoxMain" v-for="item of msgDate">
+            <div :class="userID===item.userID?'right':'left'" v-if="item.role!='system'">
+              <el-avatar :src="item?.avatar_url" size="large" :lazy="true"></el-avatar>
+              <div class="msg">
+                <div class="title">
+                  <div class="textHide" style="max-width: 200px;">{{item?.username}}</div>
+                  <span>{{timestampToDateTime(item.timestamp)}}</span>
+                </div>
+                <div v-html="item?.content" class="msgContent"></div>
+                <el-image style="width: 200px; height: 200px;border-radius: 12px;" :src="item?.content_url"
+                  :zoom-rate="1.2" :max-scale="7" :min-scale="0.2" :preview-src-list="[item?.content_url]"
+                  :initial-index="4" fit="cover" v-if="isImageType(item?.content_url)" :preview-teleported="true"
+                  :lazy="true"></el-image>
+                <video width="320" height="240" controls v-if="isVideoUrl(item?.content_url)">
+                  <source :src="item?.content_url" type="video/mp4">
+                  <source :src="item?.content_url" type="video/ogg">
+                  您的浏览器不支持Video标签。
+                </video>
+              </div>
+            </div>
+            <div class="systemMsg" v-else>
+              {{item?.content}}
+              <p>{{timestampToDateTime(item.timestamp)}}</p>
+            </div>
+          </div>
+        </div>
+        <div class="sendArea">
+          <div class="sendInput">
+            <div class="toolbar">
+              <el-upload class="avatar-uploader" action="/upload" :show-file-list="false"
+                :on-success="handleAvatarSuccess" :before-upload="beforeAvatarUpload">
+                <img src="./images/sendImg.svg" alt="">
+              </el-upload>
+              <el-upload class="avatar-uploader" action="/upload" :show-file-list="false"
+                :on-success="handleAvatarSuccess" :before-upload="beforeVideoUpload">
+                <img src="./images/videoMsg.svg" alt="">
+              </el-upload>
+
+            </div>
+            <el-input v-model="userMsg" maxlength="300" placeholder="Please input" show-word-limit type="textarea"
+              :autosize="{ minRows: 2, maxRows: 6 }" resize="none" @keyup.enter="sendMsg()"></el-input>
+          </div>
+          <el-button type="primary" @click="sendMsg()" :disabled="!userID">发送消息 </el-button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+  </div>
+  <script>
+    const App = {
+      data() {
+        return {
+          message: "Hello Element Plus",
+          theme: "dark",
+          intervalBg: 130,
+          systemConfig: [],
+          userID: "",
+          msgDate: [],
+          userInfo: {
+            username: "",
+          },
+          user: {
+            username: "",
+            password: "",
+          },
+          userMsg: "",
+          usersendsFile: '',
+          wsUrl: '',
+          ws: null,
+          wsStatus: 0,
+          wsText: {
+            0: 'WebSocket未连接',
+            1: 'WebSocket已连接',
+            2: 'WebSocket关闭连接',
+            3: 'WebSocket连接错误',
+          }
+        };
+      },
+      methods: {
+        handleAvatarSuccess(response, uploadFile) {
+          console.log(response);
+          //this.imageUrl = response
+          this.usersendsFile = response;
+          this.$message.success("上传成功");
+          this.sendMsg()
+        },
+        beforeAvatarUpload(rawFile) {
+          if (!this.userID) {
+            this.$message.error("请先登录");
+            return
+          }
+          if (!rawFile.type.startsWith("image/")) {
+            this.$message.error("上传图片格式");
+            rawFile.type.startsWith("video/")
+            return false;
+          }
+          return true;
+        },
+        beforeVideoUpload(rawFile) {
+          if (!this.userID) {
+            this.$message.error("请先登录");
+            return
+          }
+          if (!rawFile.type.startsWith("video/")) {
+            this.$message.error("上传视频格式");
+            return false;
+          } true;
+        },
+        login() {
+          if (!this.user.username || !this.user.password) {
+            this.$message.error("请输入用户名和密码");
+            return;
+          }
+          //登录
+          fetch("/user/login", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ ...this.user }),
+          })
+            .then((response) => response.json())
+            .then((res) => {
+              if (res.code == 200) {
+                this.userID = res.data.userID;
+                this.userInfo = res.data;
+                this.$message({
+                  message: res.msg,
+                  type: "success",
+                });
+                this.getAllMsg();
+                this.wsFun()
+              } else {
+                this.$message.error(res.msg);
+              }
+            });
+        },
+        logOut() {
+          this.userID = "";
+          this.userInfo = {};
+          this.usersendsFile = ''
+          this.ws.close();
+        },
+        sendMsg() {
+          console.log(!this.userMsg && !this.usersendsFile);
+          console.log(this.userMsg, this.usersendsFile);
+          if (!this.userMsg && !this.usersendsFile) {
+            this.$message.error("请输入消息内容");
+            return;
+          }
+          if (!this.ws || !this.userID) {
+            this.$message.error("请先登录");
+            return
+          }
+          // content TEXT, 
+          // content_url TEXT,  
+          // content_type TEXT NOT NULL DEFAULT 'text', 
+          const now = new Date();
+          let obj = {
+            type: "msg",
+            userID: this.userID,
+            data: {
+              content: this.userMsg,
+              content_type: 'text',
+              content_url: this.usersendsFile,
+              userID: this.userID,//自己发消息的ID 服务器会检查
+              username: this.userInfo.username, //拿自己的用户名
+              avatar_url: this.userInfo.avatar_url,//拿自己的头像
+              timestamp: Math.floor(now.getTime() / 1000)
+            }
+          }
+          this.msgDate.push(obj.data);
+          console.log(this.msgDate, 'this.msgDate');
+          this.$nextTick(() => {
+            this.toDownFun()
+          })
+          this.ws.send(JSON.stringify(obj))
+          this.userMsg = '';
+          this.usersendsFile = '';
+        },
+        getAllMsg() {
+          fetch(`/msg?userID=${this.userID}`, {
+            method: "GET",
+            headers: {
+              "Content-Type": "application/json",
+            },
+          })
+            .then((response) => response.json())
+            .then((res) => {
+              if (res.code == 200) {
+                this.msgDate = res.data;
+                this.$nextTick(() => {
+                  this.toDownFun()
+                })
+                // element.scrollTop = element.scrollHeight - element.clientHeight;  
+              }
+            });
+        },
+        wsFun() {
+          const that = this
+          that.ws = new WebSocket(this.wsUrl);
+          that.ws.onopen = function (event) {
+            console.log("Connected to the server");
+            that.wsStatus = 1
+            // 客户端定时发送心跳包
+            // setInterval(() => {
+            if (that.ws.readyState === WebSocket.OPEN) {
+              that.ws.send(JSON.stringify({ type: 'pong', userID: that.userID, time: new Date().getTime() }));
+            }
+            // }, 3e3);
+          };
+
+          that.ws.onmessage = function (event) {
+            let data = JSON.parse(event.data);
+            console.log(data, 'event');
+            if (data?.type === "ping") {
+              that.ws.send(JSON.stringify({ type: 'pong', userID: that.userID, time: new Date().getTime() }));
+              // 这里可以发送一个响应，但通常对于服务端心跳不需要响应
+            }
+            if (data?.type === "msg") {
+              that.msgDate.push(data.data)
+              that.$nextTick(() => {
+                that.toDownFun()
+              })
+            }
+          };
+
+          that.ws.onclose = function (event) {
+            that.wsStatus = 2
+            console.log("Disconnected from the server", event);
+          };
+
+          that.ws.onerror = function (error) {
+            that.wsStatus = 3
+            console.error("WebSocket Error: ", error);
+          };
+        },
+        async copyToClipboard(text) {
+          // try {
+          //   await navigator.clipboard.writeText(text);
+          //   this.$message.success("复制成功！");
+          // } catch (err) {
+          //   this.$message.error("复制失败！" + err);
+          // }
+          // 创建一个临时的textarea元素  
+          let textarea = document.createElement('textarea');
+          textarea.style.position = 'fixed'; // 避免页面滚动  
+          textarea.style.top = 0;
+          textarea.style.left = 0;
+          textarea.style.opacity = 0; // 隐藏元素  
+
+          document.body.appendChild(textarea);
+          textarea.value = text;
+
+          // 尝试复制文本  
+          let successful;
+          try {
+            successful = document.execCommand('copy'); // 尝试复制文本  
+          } catch (err) {
+            this.$message.error("复制失败！" + err)
+          }
+
+          document.body.removeChild(textarea);
+
+          if (successful) {
+            this.$message.success("复制成功！");
+          }
+        },
+        timestampToDateTime(timestampInSeconds) {
+          // 因为JavaScript的Date对象通常使用毫秒作为时间戳，所以我们需要将秒转换为毫秒  
+          let timestampInMillis = timestampInSeconds * 1000;
+
+          // 创建一个新的Date对象  
+          let date = new Date(timestampInMillis);
+
+          // 获取各个时间部分  
+          let year = date.getFullYear();
+          let month = String(date.getMonth() + 1).padStart(2, '0'); // 月份从0开始，所以需要+1，并使用padStart来确保两位数字  
+          let day = String(date.getDate()).padStart(2, '0');
+          let hours = String(date.getHours()).padStart(2, '0');
+          let minutes = String(date.getMinutes()).padStart(2, '0');
+          let seconds = String(date.getSeconds()).padStart(2, '0');
+
+          // 将各个部分组合成一个字符串  
+          let dateTimeString = year + '-' + month + '-' + day + ' ' + hours + ':' + minutes + ':' + seconds;
+
+          // 返回结果  
+          return dateTimeString;
+        },
+        isImageType(url) {
+          if (!url) {
+            return false;
+          }
+          // 提取URL的扩展名  
+          const extension = url.split('?')[0].split('#')[0].split('.').pop().toLowerCase();
+          // 检查扩展名是否为图片类型  
+          const imageExtensions = ['gif', 'jpg', 'jpeg', 'png', 'bmp', 'webp']; // 可以根据需要添加更多扩展名  
+          return imageExtensions.includes(extension);
+        },
+        isVideoUrl(url) {
+          if (!url) {
+            return false;
+          }
+          // 提取URL的文件名部分，并去除查询参数和片段标识符  
+          const filename = url.split('?')[0].split('#')[0].split('/').pop();
+          // 提取文件的扩展名  
+          const extension = filename.split('.').pop().toLowerCase();
+          // 检查扩展名是否为视频类型  
+          const videoExtensions = ['mp4', 'webm', 'ogg', 'mov', 'avi', 'flv', 'wmv', 'mkv']; // 可以根据需要添加更多扩展名  
+          return videoExtensions.includes(extension);
+        },
+        toDownFun() {
+          // 假设你有一个元素，其ID为'myElement'  
+          var element = document.getElementById('chat');
+
+          // 滚动到底部的函数  
+          element.scrollTop = element.scrollHeight - element.clientHeight;
+
+        }
+
+      },
+      mounted() {
+        console.log("Component is mounted!");
+        fetch("/config")
+          .then((response) => response.json())
+          .then((config) => {
+            const { ipArr, wsUrl } = config;
+            this.systemConfig = ipArr;
+            this.wsUrl = wsUrl;
+
+          })
+          .catch((error) => {
+            // 处理错误
+          });
+        // this.getAllDate();
+      },
+    };
+    const app = Vue.createApp(App);
+    app.use(ElementPlus);
+    app.mount("#app");
+  </script>
+</body>
+<style></style>
+
+</html>
